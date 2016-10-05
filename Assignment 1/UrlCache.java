@@ -113,7 +113,7 @@ public class UrlCache {
         sendHeader(out, "GET " + u.getPathname() + " HTTP/1.1");
         sendHeader(out, "Host: " + u.getBasename());
         try {
-            sendHeader(out, "If-modified-since: " + getLastModified(url));
+            sendHeader(out, "If-modified-since: " + format.format(new Date(getLastModified(url))));
         } catch (UrlCacheException e) {
             // file not in cache
         }
@@ -253,16 +253,13 @@ public class UrlCache {
      * Returns the Last-Modified time associated with the object specified by the parameter url.
      *
      * @param url 	URL of the object
-     * @return the Last-Modified time as a date string
+     * @return the Last-Modified time as ms since jan 1, 1970
      * @throws UrlCacheException if the specified url is not in the cache, or there are other errors/exceptions
      */
-    public String getLastModified(String url) throws UrlCacheException {
-        SimpleDateFormat format = new SimpleDateFormat("EEE, dd MMM yyyy HH:mm:ss 'GMT'");
-        format.setTimeZone(TimeZone.getTimeZone("GMT+0000"));
-
+    public long getLastModified(String url) throws UrlCacheException {
         // if the object is in the catalog
         if (catalog.containsKey(url)) {
-            return format.format(new Date(catalog.get(url)));
+            return catalog.get(url);
         } else {
             throw new UrlCacheException("Object does not exist: " + url);
         }
