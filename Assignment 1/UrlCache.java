@@ -46,12 +46,19 @@ public class UrlCache {
     private final String cacheRoot = "./cache";
 
     /**
+     * Set to true to print communications between client and server
+     */
+    private final boolean printVerbose = false;
+
+    /**
      * Default constructor to initialize data structures used for caching/etc
      * If the cache already exists then load it. If any errors then throw exception.
      *
      * @throws UrlCacheException if encounters any errors/exceptions
      */
+    @SuppressWarnings("unchecked")
     public UrlCache() throws UrlCacheException {
+        // if the catalog already exists, load it
         if (new File(catalogPath).isFile()) {
             try {
                 ObjectInputStream in = new ObjectInputStream(new FileInputStream(catalogPath));
@@ -66,6 +73,7 @@ public class UrlCache {
             }
         } else {
             catalog = new HashMap<String, Long>();
+            // write the catalog to the file system
             dumpCache(catalogPath);
         }
     }
@@ -85,6 +93,11 @@ public class UrlCache {
         SimpleDateFormat format = new SimpleDateFormat("EEE, dd MMM yyyy HH:mm:ss 'GMT'");
         format.setTimeZone(TimeZone.getTimeZone("GMT+0000"));
 
+        // if the protocol is supported
+        if (!u.getProtocol().equals("HTTP")) {
+            throw new UrlCacheException("Protocol not supported: " + u.getProtocol());
+        }
+
         // Open socket
         try {
             sock = new Socket(u.getBasename(), u.getPort());
@@ -97,22 +110,17 @@ public class UrlCache {
         }
 
         // Make request
-        out.println("GET " + u.getPathname() + " HTTP/1.1");
-        out.println("Host: " + u.getBasename());
+        sendHeader(out, "GET " + u.getPathname() + " HTTP/1.1");
+        sendHeader(out, "Host: " + u.getBasename());
         try {
-            out.println("If-modified-since: " + getLastModified(url));
+            sendHeader(out, "If-modified-since: " + getLastModified(url));
         } catch (UrlCacheException e) {
             // file not in cache
         }
-        out.println();
+
+        // end request
+        sendHeader(out);
         out.flush();
-        /*System.out.println("> HEAD " + u.getPathname() + " HTTP/1.1\n> Host: " + u.getBasename());
-        try {
-            System.out.println("> If-modified-since: " + getLastModified(url));
-        } catch (UrlCacheException e) {
-            // file not in cache
-        }
-        System.out.println("> \\r\\n"); */
 
         // Parse Headers
         byte current;
@@ -123,22 +131,33 @@ public class UrlCache {
         int statusCode = -1;
         ArrayList<Byte> bytes = new ArrayList<Byte>();
         try {
+            // read bytes one at a time
             while ((i = in.read()) != -1) {
                 current = (byte) i;
+
+                // add the current byte to the past bytes
                 bytes.add(current);
+
+                // construct a primitive array of bytes from the ArrayList
                 currentBytes = new byte[bytes.size()];
                 for (int j = 0; j < bytes.size(); j++) {
                     currentBytes[j] = bytes.get(j).byteValue();
                 }
+
+                // interpret the bytes as a string
                 String cur;
                 try {
                     cur = new String(currentBytes, "UTF-8");
                 } catch (UnsupportedEncodingException e) {
                     throw new UrlCacheException(e.toString());
                 }
+
+                // check for the status
                 if (cur.matches("^HTTP/1\\.[01] [0-9]{3}.*$")) {
                     statusCode = Integer.parseInt(cur.split(" ")[1]);
                 }
+
+                // check for the Last-Modified header
                 if (cur.length() > 14 && cur.substring(0, 15).equals("Last-Modified: ") && cur.endsWith("\r\n")) {
                     try {
                         lm = format.parse((cur.replace("Last-Modified: ", "").trim())).getTime();
@@ -146,10 +165,16 @@ public class UrlCache {
                         throw new UrlCacheException("Bad field in Last-Modified header: " + cur);
                     }
                 }
+
+                // if the line is over, clear the byte ArrayList (start building a new string)
                 if (cur.endsWith("\r\n")) {
-                    // System.out.println("< " + cur.replace("\r\n", "\\r\\n"));
+                    if (printVerbose) {
+                        System.out.println("< " + cur.replace("\r\n", "\\r\\n"));
+                    }
                     bytes.clear();
                 }
+
+                // the response headers are done, next byte starts the body
                 if (cur.equals("\r\n")) {
                     break;
                 }
@@ -157,16 +182,25 @@ public class UrlCache {
         } catch (IOException e) {
             throw new UrlCacheException("Cannot read headers from the socket");
         }
+
+        // statusCode was never set
         if (statusCode == -1) {
-            throw new UrlCacheException("Malformed HTTP headers in response");
+            throw new UrlCacheException("HTTP response was not complete");
         }
 
-        // Handle response
+        // handle response
         switch (statusCode) {
+            case 304:
+                // the catalog says the file is up to date
+                System.out.println("Cached object is up to date. " + getFilePath(u));
+                break;
             case 200:
+                // download new file
                 if (lm == 0L) {
                     throw new UrlCacheException("No Last-Modified header in response");
                 }
+
+                // open a file corresponding to the url
                 FileOutputStream fout;
                 try {
                     constructFilePath(getFilePath(u));
@@ -176,6 +210,8 @@ public class UrlCache {
                 } catch (IOException e) {
                     throw new UrlCacheException("The cache file at " + getFilePath(u) + " cannot be updated");
                 }
+
+                // write remaining bytes in the response into the file
                 try {
                     while ((i = in.read()) != -1) {
                         fout.write(i);
@@ -183,20 +219,23 @@ public class UrlCache {
                 } catch (IOException e) {
                     throw new UrlCacheException("File writing failed: " + e.toString());
                 }
+
+                // close the file
                 try {
                     fout.flush();
                     fout.close();
                 } catch (IOException e) {
                     throw new UrlCacheException(e.toString());
                 }
+
+                // update the catalog
                 catalog.put(url, lm);
                 dumpCache(catalogPath);
+
                 System.out.println("Object downloaded to " + getFilePath(u));
                 break;
-            case 304:
-                System.out.println("Cached object is up to date. " + getFilePath(u));
-                break;
             default:
+                // statusCode was not 200 or 304
                 throw new UrlCacheException("Response came back with code " + statusCode);
         }
 
@@ -221,6 +260,7 @@ public class UrlCache {
         SimpleDateFormat format = new SimpleDateFormat("EEE, dd MMM yyyy HH:mm:ss 'GMT'");
         format.setTimeZone(TimeZone.getTimeZone("GMT+0000"));
 
+        // if the object is in the catalog
         if (catalog.containsKey(url)) {
             return format.format(new Date(catalog.get(url)));
         } else {
@@ -235,6 +275,7 @@ public class UrlCache {
      * @throws UrlCacheException when an error/exception is encountered
      */
     public void dumpCache(String path) throws UrlCacheException {
+        // open file and write the object
         try {
             ObjectOutputStream out = new ObjectOutputStream(new FileOutputStream(path));
             out.writeObject(catalog);
@@ -263,11 +304,13 @@ public class UrlCache {
      */
     public void createFileDirectory(String path, boolean fod) throws UrlCacheException {
         File f = new File(path);
+        // if it is supposed to be a file
         if (fod) {
             if (f.isDirectory()) {
                 throw new UrlCacheException("Cannot create cache file when a directory exists with the same name");
             } else {
                 try {
+                    // creates the file if it is not there, does nothing if it is
                     f.createNewFile();
                 } catch (IOException e) {
                     throw new UrlCacheException(e.toString());
@@ -277,6 +320,7 @@ public class UrlCache {
             if (f.isFile()) {
                 throw new UrlCacheException("Cannot create a directory when a file exists with the same name");
             } else {
+                // creates the directory if it is not there, does nothing if it is
                 f.mkdir();
             }
         }
@@ -288,9 +332,34 @@ public class UrlCache {
      * @throws UrlCacheException if a file or directory cannot be created.
      */
     public void constructFilePath(String path) throws UrlCacheException {
+        // split the path into parts
         String[] paths = path.split("/");
+        // iterate through the parts and make sure the directory/file exists
         for (int i = 0; i < paths.length; i++) {
             createFileDirectory(String.join("/", Arrays.copyOfRange(paths, 0, i + 1)), i == paths.length - 1 ? true : false);
+        }
+    }
+
+    /**
+     * Write a string into a stream
+     * @param out the stream
+     * @param msg the string
+     */
+    public void sendHeader(PrintWriter out, String msg) {
+        out.println(msg);
+        if (printVerbose) {
+            System.out.println("> " + msg + "\\r\\n");
+        }
+    }
+
+    /**
+     * Write "\r\n"into a stream
+     * @param out the stream
+     */
+    public void sendHeader(PrintWriter out) {
+        out.println();
+        if (printVerbose) {
+            System.out.println("> \\r\\n");
         }
     }
 
