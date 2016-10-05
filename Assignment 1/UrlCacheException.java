@@ -1,7 +1,6 @@
-
 /**
  * UrlCacheException Class
- * 
+ *
  * @author 	Majid Ghaderi
  * @version	1.1, Sep 30, 2016
  */
