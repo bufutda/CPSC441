@@ -1,0 +1,5 @@
+Manifest-Version: 1.0
+Class-Path: a3.jar
+Created-By: 1.8.0_111 (Oracle Corporation)
+Main-Class: server.FastFtpServer
+

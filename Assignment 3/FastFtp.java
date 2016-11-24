@@ -20,7 +20,8 @@ import java.net.DatagramPacket;
 import java.net.PortUnreachableException;
 import java.net.SocketTimeoutException;
 import java.net.SocketException;
-import cpsc441.a3.*;
+import cpsc441.a3.Segment;
+import cpsc441.a3.TxQueue;
 
 /**
  * FastFtp Class
@@ -153,6 +154,7 @@ public class FastFtp {
                     System.exit(1);
                 }
             }
+            LOGGER.fine("Stopping");
         }
 
         /**
@@ -268,7 +270,9 @@ public class FastFtp {
                     LOGGER.finest("Creating segment @ seq " + segNum + " of payload length " + ret);
                     upperWindow = segNum;
                     byte[] pyld = new byte[ret];
-                    pyld = payload;
+                    for (int i = 0; i < pyld.length; i++) {
+                        pyld[i] = payload[i];
+                    }
                     Segment seg = new Segment(segNum, pyld);
                     segNum += 1;
                     while (window.isFull()) {
@@ -293,6 +297,15 @@ public class FastFtp {
             while (!window.isEmpty()) {
                 Thread.yield();
             }
+            // shut down ack thread
+            LOGGER.finer("Stopping ACK thread");
+            ackThread.stopRunning();
+            try {
+                ackThread.join();
+            } catch (InterruptedException e) {
+                LOGGER.severe(e.getMessage());
+            }
+
             LOGGER.finer("File is sent, ending transmission");
             // send end of transmission (TCP)
             try {
@@ -306,9 +319,6 @@ public class FastFtp {
             // cancel timer
             LOGGER.finest("Cancelling timer");
             rtTimer.cancel();
-
-            // shut down ack thread
-            ackThread.stopRunning();
 
             // clean up sockets
             try {
@@ -335,7 +345,7 @@ public class FastFtp {
         DatagramPacket pkt = encapsulateSegment(seg);
         // send the packet
         try {
-            LOGGER.fine("SND: SEQ " + seg.getSeqNum());
+            LOGGER.fine("SND: SEQ " + seg.getSeqNum() + " (Payload: " + seg.getLength() + ")");
             udpConnection.send(pkt);
         } catch (IOException e) {
             LOGGER.severe("Could not send segment");
@@ -347,6 +357,7 @@ public class FastFtp {
             if (window.size() == 1) {
                 // start the timer
                 LOGGER.finest("Starting the timer");
+                rtTimer = new Timer(true);
                 try {
                     rtTimer.schedule(new TimeoutHandler(), timeoutLength);
                 } catch (IllegalStateException e) {
@@ -374,11 +385,11 @@ public class FastFtp {
             LOGGER.finest("Cancelling timer");
             rtTimer.cancel();
             while (window.element() != null && window.element().getSeqNum() < ack.getSeqNum()) {
+                lowerWindow = window.element().getSeqNum() + 1;
+                LOGGER.fine("Set lowerWindow to " + lowerWindow);
+                LOGGER.finest("window has size " + window.size() + " with empty " + window.isEmpty() + " with full " + window.isFull());
                 try {
-                    lowerWindow = window.element().getSeqNum() + 1;
-                    LOGGER.fine("Set lowerWindow to " + lowerWindow);
                     window.remove();
-                    LOGGER.fine("Removed SEG " + window.element().getSeqNum() + " from the queue");
                 } catch (Exception e) {
                     System.err.println("Exception when window.remove(): " + e);
                     LOGGER.severe("Message: " + e.getMessage());
@@ -423,7 +434,7 @@ public class FastFtp {
 
     public DatagramPacket encapsulateSegment (Segment seg) {
         byte[] segB = seg.getBytes();
-        return new DatagramPacket(new byte[segB.length], segB.length, udpConnection.getInetAddress(), udpConnection.getPort());
+        return new DatagramPacket(segB, segB.length, udpConnection.getInetAddress(), udpConnection.getPort());
     }
 
     /**
@@ -431,15 +442,15 @@ public class FastFtp {
      */
     public static void main (String[] args) {
         // initialize logger
-        LOGGER.setLevel(Level.FINE);
+        LOGGER.setLevel(Level.WARNING);
         ConsoleHandler logHandler = new ConsoleHandler();
-        logHandler.setLevel(Level.FINE);
+        logHandler.setLevel(Level.WARNING);
         LOGGER.addHandler(logHandler);
         LOGGER.setUseParentHandlers(false);
         LOGGER.finest("Check");
 
-        int windowSize = 1;//10; //segments
-        int timeout = 5000;//100; // milli-seconds
+        int windowSize = 10; //segments
+        int timeout = 100; // milli-seconds
 
         String serverName = "localhost";
         String fileName = "";
